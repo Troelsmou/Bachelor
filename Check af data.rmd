@@ -1,0 +1,191 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+core2020 <- read_csv("2020.csv") %>%
+  select(Score, PDID, DescriptionOfTrait, DescriptionOfMethod, Name, TRID) %>%
+  na.omit()
+old_cores <- read_csv("Core_Scores.csv") %>%
+  select(Score, PDID, DescriptionOfTrait, DescriptionOfMethod, Name, TRID) %>%
+  na.omit()
+sejer_new <- bind_rows(read_csv("Sejer 2020.csv"), read_csv("Sejer 2021.csv"))  %>%
+  select(Score, PDID, DescriptionOfTrait, DescriptionOfMethod, Name, TRID) %>%
+  na.omit()
+
+
+old_cores <- old_cores %>%
+  filter(TRID != 25)
+```
+
+```{r}
+bind_rows(old_cores, core2020) %>%
+  bind_rows(sejer_new) -> faba_df
+
+faba_df_filtered <- faba_df %>%
+  filter(!(DescriptionOfTrait == "Plant Height" & Score > 500)) %>%
+  filter(!(DescriptionOfTrait == "Number of ovules" & Score > 9)) %>%
+  filter(!(DescriptionOfTrait == "End Flowering" & Score > 55)) %>%
+  filter(!(DescriptionOfTrait == "Seed Coat Colour" & Score > 8))
+```
+
+
+```{r}
+full_traits <- faba_df$DescriptionOfTrait %>% unique()
+x <- 10
+
+faba_df_filtered %>%
+  filter(DescriptionOfTrait == full_traits[x]) %>%
+  group_by(TRID) %>%
+  summarise(mean = mean(na.omit(Score))) -> means
+
+tainted <- c("Core92", "Core165", "Core166", "Core172", "Core177", "Core178", "Core179", "Core187", "Core191", "Core232", "Core248", "Core263")
+
+faba_df_untainted <- faba_df_filtered %>%
+  filter(!(Name %in% tainted))
+
+faba_df_filtered %>%
+  filter(!Name %in% tainted) %>%
+  filter(DescriptionOfTrait == full_traits[x]) %>%
+  ggplot(aes(x = Score)) +
+  geom_histogram(bins = 10, fill = "red", color = "black") +
+ # xlim(c(0,200)) +
+ # ylim(c(0, 100)) +
+  facet_wrap(~TRID, ncol=2) +
+  geom_vline(aes(xintercept = mean), data = means) +
+  labs(title = full_traits[x])
+```
+
+```{r}
+faba_df_filtered %>%
+  filter(Name %in% outlier_names) %>%
+  filter(DescriptionOfTrait %in% full_traits[c(c(4, 5, 6, 7, 8, 9, 10, 11, 19))]) %>%
+  group_by(Name, DescriptionOfTrait) %>%
+  dplyr::summarise(mean = mean(Score, na.rm = T)) %>%
+  pivot_wider(id_cols = Name, names_from = DescriptionOfTrait, values_from = mean) %>%
+  corrgram(lower.panel = panel.pts, upper.panel = panel.cor, diag.panel = panel.density)
+
+faba_df %>%
+  filter(DescriptionOfTrait == full_traits[1]) -> pair_df
+
+pair_df %>%
+#  filter(DescriptionOfTrait == full_traits[1])
+  group_by(Name) %>%
+  dplyr::summarise(mean = mean(Score, na.rm = T)) %>%
+  pivot_wider(id_cols = Name, names_from = DescriptionOfTrait, values_from = mean) %>%
+  GGally::ggpairs(columns = 2:27)
+```
+
+```{r}
+faba_df %>%
+  filter(grepl("^Core", Name)) %$%
+  unique(Name) -> cores
+x <- 1
+
+faba_df %>%
+  filter(DescriptionOfTrait == full_traits[1], Name == cores[x]) %>%
+  select(Score, Name, TRID) %>%
+  pivot_wider(names_from = c(Name, TRID),values_from = Score) %>%
+  unnest() %>%
+  GGally::ggpairs() +
+  labs(title = cores[x]) +
+  xlim(c(15, 50)) +
+  ylim(c(15,50))
+
+faba_df %>%
+  filter(DescriptionOfTrait == full_traits[1] & Score < 30) %$%
+  unique(Name) -> lower_cores_flowering_start
+
+faba_df %>%
+  filter(DescriptionOfTrait == full_traits[2]) %>%
+  filter(TRID == 11 & Score < 17 | TRID == 22 & Score < 30) %$%
+  unique(Name) -> lower_cores_flowering_end
+
+faba_df %>%
+  filter(TRID == 30 & DescriptionOfTrait == full_traits[1]) %>%
+  mutate(lower = ifelse(Name %in% lower_cores_flowering_start, T, F)) %>%
+  ggplot(mapping = aes(x = Score, fill = lower)) +
+  geom_histogram(bins = 15) +
+  labs(title = "Earliness of Flowering", subtitle = "True means score was lower in another trial")
+  
+```
+
+
+For creating variance to mean ratio histogram plots.
+
+```{r}
+faba_df_filtered %>%
+  group_by(Name, TRID, DescriptionOfTrait) %>%
+  summarise(var = var(na.omit(Score)), mean = mean(na.omit(Score)), var.to.mean = var/mean) -> var_df
+
+#Creates means for each combination of trial id and trait.
+
+var_df %>%
+  group_by(DescriptionOfTrait, TRID) %>%
+  summarise(mean_vm = mean(na.omit(var.to.mean))) -> means
+
+#Creates an adjusted V/M ratio based on the above calculated means
+
+small_fun <- function(df) {
+  df <- na.omit(df)
+  
+  ret <- c()
+  
+  for (i in 1:nrow(df)) {
+    df[i,] -> tempo
+    x <- filter(means, DescriptionOfTrait == tempo$DescriptionOfTrait & TRID == tempo$TRID)
+    ret <- c(ret, df$var.to.mean[i]/x$mean_vm)
+  }
+  return(ret)
+}
+
+var_df %>%
+  na.omit() -> var_df
+
+var_df$adjusted <- small_fun(var_df)
+
+
+var_df %>%
+  arrange(-adjusted) -> another_var_df
+another_var_df <- another_var_df[1:100,]
+
+var_df %>%
+ # filter(DescriptionOfTrait %in% full_traits[-c(23, 22, 26, 20, 16, 15, 14, 24)]) %>%
+  ggplot(mapping = aes(x = adjusted, fill = as.factor(TRID), color = "Black")) +
+  geom_histogram(bins = 20) +
+#  xlim(c(0,100)) +
+  facet_wrap(~DescriptionOfTrait) +
+  labs(title = "Variance to mean ratio of cores and traits - tainted", subtitle = "Adjusted for average var to mean ratio for the respective trait and trial ID", caption = "Average mean of a core for a particular trial ID and trait divided by its variance divided by the mean variance to mean ratio for the particular trial ID and trait")
+```
+
+Checking the found "outliers"
+```{r}
+var_df %>%
+  filter(DescriptionOfTrait == "Earliness of Flowering" & adjusted > 50 |
+         DescriptionOfTrait == "Maturation Date" & adjusted > 25 |
+         DescriptionOfTrait == "Seed Area" & adjusted > 50 |
+         DescriptionOfTrait == "Seed Length" & adjusted > 50 |
+         DescriptionOfTrait == "TGW" & adjusted > 25 |
+         DescriptionOfTrait == "Seed Coat Colour" & adjusted > 100 |
+         DescriptionOfTrait == "Duration of flowering" & adjusted > 10 |
+         DescriptionOfTrait == "Internode_length" & adjusted > 10 |
+         DescriptionOfTrait == "Novitron harm" & adjusted > 5 |
+         DescriptionOfTrait == "Sterile tillers" & adjusted > 10) -> outliers
+
+full_traits <- faba_df$DescriptionOfTrait %>% unique()
+x <- 16
+
+faba_df_filtered %>%
+  filter(Name %in% c("Core314")) %>%
+  filter(DescriptionOfTrait == full_traits[x]) %>%
+  ggplot(mapping = aes(x = Score, fill = as.factor(Name))) +
+  geom_histogram(bins = 12, color = "black") +
+ # xlim(c(0,200)) +
+  #ylim(c(0, 100)) +
+  facet_wrap(~TRID, ncol=2) +
+  labs(title = full_traits[x])
+
+```
+
